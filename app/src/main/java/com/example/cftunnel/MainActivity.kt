@@ -1,0 +1,149 @@
+package com.example.cftunnel
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.example.cftunnel.databinding.ActivityMainBinding
+import kotlinx.coroutines.launch
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var appPrefs: AppPreferences
+    private var logManager: LogManager? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        appPrefs = AppPreferences(this)
+        logManager = TunnelService.logManager ?: LogManager(this).also { TunnelService.logManager = it }
+
+        setupUI()
+        observeServiceState()
+        observeLogs()
+
+        requestNotificationPermission()
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+    }
+
+    private fun setupUI() {
+        binding.etToken.setText(appPrefs.tunnelToken)
+        binding.switchAutoStart.isChecked = appPrefs.autoStartEnabled
+
+        binding.etToken.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                appPrefs.tunnelToken = s?.toString() ?: ""
+            }
+        })
+
+        binding.switchAutoStart.setOnCheckedChangeListener { _, isChecked ->
+            appPrefs.autoStartEnabled = isChecked
+        }
+
+        binding.btnStart.setOnClickListener {
+            val token = appPrefs.tunnelToken
+            if (token.isBlank()) {
+                Toast.makeText(this, "Token cannot be empty", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val intent = Intent(this, TunnelService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+        }
+
+        binding.btnStop.setOnClickListener {
+            val intent = Intent(this, TunnelService::class.java).apply {
+                action = TunnelService.ACTION_STOP_SERVICE
+            }
+            startService(intent)
+        }
+
+        binding.btnBatteryOpt.setOnClickListener {
+            requestBatteryOptimization()
+        }
+
+        binding.btnClearLogs.setOnClickListener {
+            logManager?.clearLogs()
+            binding.tvLogs.text = ""
+        }
+    }
+
+    private fun requestBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent()
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+            } else {
+                Toast.makeText(this, "Battery optimization already ignored", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun observeServiceState() {
+        lifecycleScope.launch {
+            TunnelService.serviceState.collect { state ->
+                when (state) {
+                    ServiceState.STOPPED -> {
+                        binding.tvStatus.text = getString(R.string.status_stopped)
+                        binding.tvStatus.setTextColor(getColor(android.R.color.darker_gray))
+                        binding.btnStart.isEnabled = true
+                        binding.btnStop.isEnabled = false
+                    }
+                    ServiceState.RUNNING -> {
+                        binding.tvStatus.text = getString(R.string.status_running)
+                        binding.tvStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+                        binding.btnStart.isEnabled = false
+                        binding.btnStop.isEnabled = true
+                    }
+                    ServiceState.RECONNECTING -> {
+                        binding.tvStatus.text = getString(R.string.status_reconnecting)
+                        binding.tvStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
+                        binding.btnStart.isEnabled = false
+                        binding.btnStop.isEnabled = true
+                    }
+                }
+            }
+        }
+    }
+
+    private fun observeLogs() {
+        lifecycleScope.launch {
+            logManager?.logs?.collect { logs ->
+                binding.tvLogs.text = logs.joinToString("\n")
+                binding.logScrollView.post {
+                    binding.logScrollView.fullScroll(android.view.View.FOCUS_DOWN)
+                }
+            }
+        }
+    }
+}
