@@ -1,0 +1,41 @@
+--- app/src/main/java/com/example/cftunnel/LogManager.kt
++++ app/src/main/java/com/example/cftunnel/LogManager.kt
+@@ -4,6 +4,9 @@
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.StateFlow
+ import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.coroutines.runBlocking
+ import java.io.File
+ import java.io.FileWriter
+ import java.text.SimpleDateFormat
+@@ -14,6 +17,7 @@
+     private val _logs = MutableStateFlow<List<String>>(emptyList())
+     val logs: StateFlow<List<String>> = _logs.asStateFlow()
+
++    private val mutex = Mutex()
+     private val maxLogLines = 500
+     private val logFile: File by lazy {
+         File(context.filesDir, "important_logs.txt")
+@@ -23,11 +27,13 @@
+
+     fun appendLog(log: String) {
+-        val currentLogs = _logs.value.toMutableList()
+-        currentLogs.add(log)
+-        if (currentLogs.size > maxLogLines) {
+-            currentLogs.removeAt(0)
+-        }
+-        _logs.value = currentLogs
++        runBlocking {
++            mutex.withLock {
++                val currentLogs = _logs.value.toMutableList()
++                currentLogs.add(log)
++                if (currentLogs.size > maxLogLines) {
++                    currentLogs.removeAt(0)
++                }
++                _logs.value = currentLogs
++            }
++        }
+
+         // Check if important log and write to file
